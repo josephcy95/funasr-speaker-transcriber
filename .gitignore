@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+.uv/
+uv.lock
+
+# Local input/output files
+input/
+output/
+
+# Audio / video source files
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.opus
+*.mp4
+*.mkv
+*.mov
+*.webm
+*.avi
+
+# Transcript outputs
+*.srt
+*.vtt
+*.txt
+*.json
+*.md.tmp
+
+# Model / cache folders if accidentally created inside repo
+models/
+model/
+checkpoints/
+.cache/
+huggingface/
+modelscope/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.bin
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
