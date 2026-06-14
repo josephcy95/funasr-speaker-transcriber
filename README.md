@@ -104,7 +104,7 @@ gpu: NVIDIA GeForce RTX 4080 SUPER
 
 ```bash
 uv pip install numpy
-uv pip install -U funasr modelscope huggingface_hub soundfile ffmpeg-python
+uv pip install -U funasr modelscope huggingface_hub soundfile
 ```
 
 Optional extras if needed:
@@ -137,44 +137,18 @@ input/interview.m4a
 
 ---
 
-## 7. Convert Audio to 16 kHz Mono WAV
-
-For best diarization stability, normalize the audio first.
-
-For audio files:
+## 7. Run Transcription
 
 ```bash
-ffmpeg -y -i input/interview.wav -ac 1 -ar 16000 output/interview_16k.wav
+uv run python transcribe_speaker.py
 ```
 
-For video files:
+The script lists supported audio/video files in `input/`, asks which one to use, converts it to a temporary 16 kHz mono WAV with `ffmpeg`, transcribes it, and writes the outputs into `output/`.
+
+You can also pass a file directly:
 
 ```bash
-ffmpeg -y -i input/interview.mp4 -ac 1 -ar 16000 output/interview_16k.wav
-```
-
-Check audio format:
-
-```bash
-ffprobe -v error -select_streams a:0 \
-  -show_entries stream=codec_name,sample_rate,channels \
-  -of default=noprint_wrappers=1 output/interview_16k.wav
-```
-
-Expected:
-
-```text
-codec_name=pcm_s16le
-sample_rate=16000
-channels=1
-```
-
----
-
-## 8. Run Transcription
-
-```bash
-uv run python transcribe_speaker.py output/interview_16k.wav
+uv run python transcribe_speaker.py input/interview.mp4
 ```
 
 The first run downloads models from Hugging Face. Future runs should reuse cached models.
@@ -182,14 +156,14 @@ The first run downloads models from Hugging Face. Future runs should reuse cache
 Outputs:
 
 ```text
-output/interview_16k.txt
-output/interview_16k.plain.txt
-output/interview_16k.srt
+output/interview.txt
+output/interview.plain.txt
+output/interview.srt
 ```
 
 ---
 
-## 9. Output Formats
+## 8. Output Formats
 
 ### Timestamp TXT
 
@@ -216,7 +190,7 @@ Speaker 1: 今天我们来聊一下这个问题。
 
 ---
 
-## 10. Notes
+## 9. Notes
 
 Speaker labels are numeric only:
 
@@ -242,7 +216,7 @@ For Chinese interviews, best results usually come from:
 
 ---
 
-## 11. Clean Up Disk Space
+## 10. Clean Up Disk Space
 
 Delete local project files:
 
