@@ -20,6 +20,8 @@ MEDIA_EXTENSIONS = {
     ".webm",
 }
 
+YTDLP_INSTALL_HINT = 'Install it with: uv pip install -U "yt-dlp[default]"'
+
 
 def fmt_time_ms(ms: int) -> str:
     total_seconds = ms / 1000
@@ -79,6 +81,39 @@ def choose_input_file(input_dir: Path) -> Path:
         print(f"Please enter a number from 1 to {len(files)}.")
 
 
+def choose_source() -> str:
+    print("Choose transcription source:")
+    print("  1. YouTube URL")
+    print("  2. Local file from input/")
+
+    while True:
+        choice = input("Choose 1 or 2, or q to quit: ").strip().lower()
+
+        if choice in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+
+        if choice in {"1", "youtube", "yt"}:
+            return "youtube"
+
+        if choice in {"2", "input", "local"}:
+            return "input"
+
+        print("Please enter 1 for YouTube or 2 for input folder.")
+
+
+def prompt_youtube_url() -> str:
+    while True:
+        url = input("Paste YouTube URL, or q to quit: ").strip()
+
+        if url.lower() in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+
+        if url:
+            return url
+
+        print("Please paste a YouTube URL.")
+
+
 def resolve_input_file(audio_arg: str | None, input_dir: Path) -> Path:
     if not audio_arg:
         return choose_input_file(input_dir)
@@ -92,6 +127,87 @@ def resolve_input_file(audio_arg: str | None, input_dir: Path) -> Path:
         return input_path
 
     raise SystemExit(f"Input file not found: {audio_arg}")
+
+
+def check_ytdlp_update() -> None:
+    if shutil.which("yt-dlp") is None:
+        raise SystemExit(f"yt-dlp was not found. {YTDLP_INSTALL_HINT}")
+
+    print("Checking yt-dlp for updates...")
+    result = subprocess.run(
+        ["yt-dlp", "-U"],
+        capture_output=True,
+        text=True,
+    )
+
+    for output in (result.stdout.strip(), result.stderr.strip()):
+        if output:
+            print(output)
+
+    if result.returncode != 0:
+        print("yt-dlp update check did not complete; continuing with installed yt-dlp.")
+
+
+def download_youtube_media(url: str, temp_dir: Path) -> Path:
+    check_ytdlp_update()
+
+    output_template = temp_dir / "%(title).120B [%(id)s].%(ext)s"
+    command = [
+        "yt-dlp",
+        "--no-playlist",
+        "-f",
+        "bestaudio/best",
+        "-o",
+        str(output_template),
+        url,
+    ]
+
+    print("Downloading YouTube media with yt-dlp...")
+
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit("yt-dlp failed while downloading the YouTube URL.") from exc
+
+    candidates = [
+        path
+        for path in temp_dir.iterdir()
+        if path.is_file() and path.suffix.lower() not in {".part", ".ytdl", ".temp"}
+    ]
+
+    if not candidates:
+        raise SystemExit("yt-dlp finished, but no downloaded media file was found.")
+
+    downloaded_path = max(candidates, key=lambda path: path.stat().st_mtime)
+    print(f"Downloaded YouTube media: {downloaded_path.name}")
+    return downloaded_path
+
+
+def resolve_media_source(
+    args: argparse.Namespace,
+    input_dir: Path,
+    temp_dir: Path,
+) -> tuple[Path, str, str]:
+    if args.audio and args.youtube_url:
+        raise SystemExit("Use either a local audio/video file or --youtube-url, not both.")
+
+    if args.youtube_url:
+        media_path = download_youtube_media(args.youtube_url, temp_dir)
+        return media_path, media_path.stem, f"YouTube: {args.youtube_url}"
+
+    if args.audio:
+        input_path = resolve_input_file(args.audio, input_dir)
+        return input_path, input_path.stem, str(input_path)
+
+    source = choose_source()
+
+    if source == "youtube":
+        url = prompt_youtube_url()
+        media_path = download_youtube_media(url, temp_dir)
+        return media_path, media_path.stem, f"YouTube: {url}"
+
+    input_path = choose_input_file(input_dir)
+    return input_path, input_path.stem, str(input_path)
 
 
 def convert_to_16k_wav(input_path: Path, temp_dir: Path) -> Path:
@@ -177,7 +293,10 @@ def write_outputs(sentence_info: list[dict], outdir: Path, base: str) -> tuple[P
             if not text:
                 continue
 
-            f.write(f"[{fmt_time_ms(start)} - {fmt_time_ms(end)}] Speaker {spk}: {text}\n")
+            f.write(
+                f"[{fmt_time_ms(start)} - {fmt_time_ms(end)}] "
+                f"Speaker {spk}: {text}\n"
+            )
 
     with open(txt_plain_path, "w", encoding="utf-8") as f:
         last_spk = None
@@ -227,11 +346,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "audio",
         nargs="?",
-        help="Optional audio/video path. If omitted, choose from the input folder.",
+        help="Optional local audio/video path.",
     )
-    parser.add_argument("--input-dir", default="input", help="Folder to list in interactive mode")
+    parser.add_argument("--youtube-url", help="Download a YouTube URL with yt-dlp")
+    parser.add_argument(
+        "--input-dir",
+        default="input",
+        help="Folder to list in interactive mode",
+    )
     parser.add_argument("--outdir", default="output", help="Output directory")
-    parser.add_argument("--device", default="cuda:0", help="FunASR device, for example cuda:0 or cpu")
+    parser.add_argument(
+        "--device",
+        default="cuda:0",
+        help="FunASR device, for example cuda:0 or cpu",
+    )
     return parser.parse_args()
 
 
@@ -239,22 +367,29 @@ def main():
     args = parse_args()
     input_dir = Path(args.input_dir)
     outdir = Path(args.outdir)
-    input_path = resolve_input_file(args.audio, input_dir)
-    output_base = input_path.stem
 
     with tempfile.TemporaryDirectory(prefix="funasr-transcribe-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        wav_path = convert_to_16k_wav(input_path, temp_dir)
+        media_path, output_base, source_label = resolve_media_source(
+            args,
+            input_dir,
+            temp_dir,
+        )
+        wav_path = convert_to_16k_wav(media_path, temp_dir)
         model = load_model(args.device)
         sentence_info = transcribe(model, wav_path)
 
     if not sentence_info:
         return
 
-    txt_ts_path, txt_plain_path, srt_path = write_outputs(sentence_info, outdir, output_base)
+    txt_ts_path, txt_plain_path, srt_path = write_outputs(
+        sentence_info,
+        outdir,
+        output_base,
+    )
 
     print("Done.")
-    print(f"Source             : {input_path}")
+    print(f"Source             : {source_label}")
     print(f"TXT with timestamp : {txt_ts_path}")
     print(f"TXT plain          : {txt_plain_path}")
     print(f"SRT                : {srt_path}")

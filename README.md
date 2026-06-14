@@ -9,7 +9,7 @@ Local Chinese ASR transcription pipeline using:
 * CAM++ speaker diarization
 * NVIDIA CUDA GPU through WSL2
 
-This setup is intended for offline transcription of downloaded interview audio/video files.
+This setup is intended for transcription of local interview audio/video files or YouTube URLs.
 
 It outputs:
 
@@ -104,7 +104,7 @@ gpu: NVIDIA GeForce RTX 4080 SUPER
 
 ```bash
 uv pip install numpy
-uv pip install -U funasr modelscope huggingface_hub soundfile
+uv pip install -U funasr modelscope huggingface_hub soundfile "yt-dlp[default]"
 ```
 
 Optional extras if needed:
@@ -143,12 +143,34 @@ input/interview.m4a
 uv run python transcribe_speaker.py
 ```
 
-The script lists supported audio/video files in `input/`, asks which one to use, converts it to a temporary 16 kHz mono WAV with `ffmpeg`, transcribes it, and writes the outputs into `output/`.
+The script first asks where the source should come from:
+
+```text
+Choose transcription source:
+  1. YouTube URL
+  2. Local file from input/
+```
+
+For YouTube, paste the URL. The script checks `yt-dlp` for updates, downloads the media into a temporary folder, converts it to a temporary 16 kHz mono WAV with `ffmpeg`, transcribes it, and writes the outputs into `output/`.
+
+For local files, the script lists supported audio/video files in `input/`, asks which one to use, converts it to a temporary 16 kHz mono WAV with `ffmpeg`, transcribes it, and writes the outputs into `output/`.
 
 You can also pass a file directly:
 
 ```bash
 uv run python transcribe_speaker.py input/interview.mp4
+```
+
+Or pass a YouTube URL directly:
+
+```bash
+uv run python transcribe_speaker.py --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+If your `yt-dlp` install method does not support self-update, update it manually:
+
+```bash
+uv pip install -U "yt-dlp[default]"
 ```
 
 The first run downloads models from Hugging Face. Future runs should reuse cached models.
@@ -242,7 +264,7 @@ uv cache clean
 
 ---
 
-## 12. Files That Should Be Committed
+## 11. Files That Should Be Committed
 
 Commit only source/config/docs:
 
