@@ -21,6 +21,24 @@ MEDIA_EXTENSIONS = {
 }
 
 YTDLP_INSTALL_HINT = 'Install it with: uv pip install -U "yt-dlp[default]"'
+QWEN_INSTALL_HINT = "Install it with: uv pip install -U qwen-asr"
+
+MODEL_CONFIGS = {
+    "funasr-speaker": {
+        "label": "FunASR Paraformer + CAM++ speaker diarization",
+        "kind": "funasr-speaker",
+    },
+    "qwen3-asr-0.6b": {
+        "label": "Qwen3-ASR 0.6B, single-speaker/no diarization",
+        "kind": "qwen",
+        "model_id": "Qwen/Qwen3-ASR-0.6B",
+    },
+    "qwen3-asr-1.7b": {
+        "label": "Qwen3-ASR 1.7B, single-speaker/no diarization",
+        "kind": "qwen",
+        "model_id": "Qwen/Qwen3-ASR-1.7B",
+    },
+}
 
 
 def fmt_time_ms(ms: int) -> str:
@@ -114,6 +132,30 @@ def prompt_youtube_url() -> str:
         print("Please paste a YouTube URL.")
 
 
+def choose_transcription_model() -> str:
+    choices = list(MODEL_CONFIGS.items())
+
+    print("Choose transcription model:")
+    for index, (_, config) in enumerate(choices, start=1):
+        print(f"  {index}. {config['label']}")
+
+    while True:
+        choice = input("Choose a model number, or q to quit: ").strip().lower()
+
+        if choice in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(choices):
+                return choices[index - 1][0]
+
+        if choice in MODEL_CONFIGS:
+            return choice
+
+        print(f"Please enter a number from 1 to {len(choices)}.")
+
+
 def resolve_input_file(audio_arg: str | None, input_dir: Path) -> Path:
     if not audio_arg:
         return choose_input_file(input_dir)
@@ -183,31 +225,35 @@ def download_youtube_media(url: str, temp_dir: Path) -> Path:
     return downloaded_path
 
 
-def resolve_media_source(
+def select_media_source(
     args: argparse.Namespace,
     input_dir: Path,
-    temp_dir: Path,
-) -> tuple[Path, str, str]:
+) -> tuple[str, Path | str, str]:
     if args.audio and args.youtube_url:
         raise SystemExit("Use either a local audio/video file or --youtube-url, not both.")
 
     if args.youtube_url:
-        media_path = download_youtube_media(args.youtube_url, temp_dir)
-        return media_path, media_path.stem, f"YouTube: {args.youtube_url}"
+        return "youtube", args.youtube_url, f"YouTube: {args.youtube_url}"
 
     if args.audio:
         input_path = resolve_input_file(args.audio, input_dir)
-        return input_path, input_path.stem, str(input_path)
+        return "local", input_path, str(input_path)
 
     source = choose_source()
 
     if source == "youtube":
         url = prompt_youtube_url()
-        media_path = download_youtube_media(url, temp_dir)
-        return media_path, media_path.stem, f"YouTube: {url}"
+        return "youtube", url, f"YouTube: {url}"
 
     input_path = choose_input_file(input_dir)
-    return input_path, input_path.stem, str(input_path)
+    return "local", input_path, str(input_path)
+
+
+def materialize_media_source(source_type: str, source_value: Path | str, temp_dir: Path) -> Path:
+    if source_type == "youtube":
+        return download_youtube_media(str(source_value), temp_dir)
+
+    return Path(source_value)
 
 
 def convert_to_16k_wav(input_path: Path, temp_dir: Path) -> Path:
@@ -241,10 +287,34 @@ def convert_to_16k_wav(input_path: Path, temp_dir: Path) -> Path:
     return wav_path
 
 
-def load_model(device: str):
+def get_duration_ms(media_path: Path) -> int:
+    if shutil.which("ffprobe") is None:
+        return 1000
+
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(media_path),
+    ]
+
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        duration = float(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 1000
+
+    return max(1000, int(duration * 1000))
+
+
+def load_funasr_speaker_model(device: str):
     from funasr import AutoModel
 
-    print("Loading FunASR model...")
+    print("Loading FunASR speaker diarization model...")
 
     return AutoModel(
         model="funasr/paraformer-zh",
@@ -258,8 +328,8 @@ def load_model(device: str):
     )
 
 
-def transcribe(model, wav_path: Path) -> list[dict]:
-    print(f"Transcribing temporary WAV: {wav_path}")
+def transcribe_funasr(model, wav_path: Path) -> list[dict]:
+    print(f"Transcribing temporary WAV with FunASR: {wav_path}")
 
     res = model.generate(
         input=str(wav_path),
@@ -276,7 +346,57 @@ def transcribe(model, wav_path: Path) -> list[dict]:
     return sentence_info
 
 
-def write_outputs(sentence_info: list[dict], outdir: Path, base: str) -> tuple[Path, Path, Path]:
+def load_qwen_model(model_id: str, device: str, max_new_tokens: int):
+    try:
+        import torch
+        from qwen_asr import Qwen3ASRModel
+    except ImportError as exc:
+        raise SystemExit(f"qwen-asr was not found. {QWEN_INSTALL_HINT}") from exc
+
+    dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+
+    print(f"Loading Qwen3-ASR model: {model_id}")
+
+    return Qwen3ASRModel.from_pretrained(
+        model_id,
+        dtype=dtype,
+        device_map=device,
+        max_inference_batch_size=8,
+        max_new_tokens=max_new_tokens,
+    )
+
+
+def get_result_value(result, key: str):
+    if isinstance(result, dict):
+        return result.get(key)
+
+    return getattr(result, key, None)
+
+
+def transcribe_qwen(model, wav_path: Path, language: str | None) -> tuple[str, str | None]:
+    print(f"Transcribing temporary WAV with Qwen3-ASR: {wav_path}")
+
+    results = model.transcribe(
+        audio=str(wav_path),
+        language=language,
+    )
+
+    result = results[0] if isinstance(results, list) else results
+    text = (get_result_value(result, "text") or "").strip()
+    detected_language = get_result_value(result, "language")
+
+    if not text:
+        print("No transcript text found.")
+        print(results)
+
+    return text, detected_language
+
+
+def write_speaker_outputs(
+    sentence_info: list[dict],
+    outdir: Path,
+    base: str,
+) -> tuple[Path, Path, Path]:
     outdir.mkdir(parents=True, exist_ok=True)
 
     txt_ts_path = outdir / f"{base}.txt"
@@ -339,6 +459,47 @@ def write_outputs(sentence_info: list[dict], outdir: Path, base: str) -> tuple[P
     return txt_ts_path, txt_plain_path, srt_path
 
 
+def wrap_srt_text(text: str, width: int = 42) -> str:
+    clean_text = " ".join(text.split())
+    if not clean_text:
+        return ""
+
+    return "\n".join(
+        clean_text[index : index + width]
+        for index in range(0, len(clean_text), width)
+    )
+
+
+def write_qwen_outputs(
+    text: str,
+    language: str | None,
+    duration_ms: int,
+    outdir: Path,
+    base: str,
+) -> tuple[Path, Path, Path]:
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    txt_ts_path = outdir / f"{base}.txt"
+    txt_plain_path = outdir / f"{base}.plain.txt"
+    srt_path = outdir / f"{base}.srt"
+
+    with open(txt_ts_path, "w", encoding="utf-8") as f:
+        if language:
+            f.write(f"Language: {language}\n")
+        f.write(f"[{fmt_time_ms(0)} - {fmt_time_ms(duration_ms)}] {text}\n")
+
+    with open(txt_plain_path, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.write("\n")
+
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write("1\n")
+        f.write(f"{fmt_srt_time(0)} --> {fmt_srt_time(duration_ms)}\n")
+        f.write(f"{wrap_srt_text(text)}\n")
+
+    return txt_ts_path, txt_plain_path, srt_path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Transcribe an input audio/video file with speaker labels."
@@ -349,6 +510,21 @@ def parse_args() -> argparse.Namespace:
         help="Optional local audio/video path.",
     )
     parser.add_argument("--youtube-url", help="Download a YouTube URL with yt-dlp")
+    parser.add_argument(
+        "--model",
+        choices=list(MODEL_CONFIGS),
+        help="Transcription model. If omitted, choose interactively.",
+    )
+    parser.add_argument(
+        "--qwen-language",
+        help='Optional Qwen language hint, for example "Chinese" or "English".',
+    )
+    parser.add_argument(
+        "--qwen-max-new-tokens",
+        type=int,
+        default=1024,
+        help="Maximum new tokens for Qwen3-ASR generation.",
+    )
     parser.add_argument(
         "--input-dir",
         default="input",
@@ -367,29 +543,50 @@ def main():
     args = parse_args()
     input_dir = Path(args.input_dir)
     outdir = Path(args.outdir)
+    source_type, source_value, source_label = select_media_source(args, input_dir)
+    model_choice = args.model or choose_transcription_model()
+    model_config = MODEL_CONFIGS[model_choice]
 
     with tempfile.TemporaryDirectory(prefix="funasr-transcribe-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        media_path, output_base, source_label = resolve_media_source(
-            args,
-            input_dir,
-            temp_dir,
-        )
+        media_path = materialize_media_source(source_type, source_value, temp_dir)
+        output_base = media_path.stem
         wav_path = convert_to_16k_wav(media_path, temp_dir)
-        model = load_model(args.device)
-        sentence_info = transcribe(model, wav_path)
 
-    if not sentence_info:
-        return
+        if model_config["kind"] == "funasr-speaker":
+            model = load_funasr_speaker_model(args.device)
+            sentence_info = transcribe_funasr(model, wav_path)
 
-    txt_ts_path, txt_plain_path, srt_path = write_outputs(
-        sentence_info,
-        outdir,
-        output_base,
-    )
+            if not sentence_info:
+                return
+
+            txt_ts_path, txt_plain_path, srt_path = write_speaker_outputs(
+                sentence_info,
+                outdir,
+                output_base,
+            )
+        elif model_config["kind"] == "qwen":
+            model = load_qwen_model(
+                model_config["model_id"],
+                args.device,
+                args.qwen_max_new_tokens,
+            )
+            text, language = transcribe_qwen(model, wav_path, args.qwen_language)
+
+            if not text:
+                return
+
+            txt_ts_path, txt_plain_path, srt_path = write_qwen_outputs(
+                text,
+                language,
+                get_duration_ms(wav_path),
+                outdir,
+                output_base,
+            )
 
     print("Done.")
     print(f"Source             : {source_label}")
+    print(f"Model              : {model_config['label']}")
     print(f"TXT with timestamp : {txt_ts_path}")
     print(f"TXT plain          : {txt_plain_path}")
     print(f"SRT                : {srt_path}")

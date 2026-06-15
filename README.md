@@ -7,6 +7,8 @@ Local Chinese ASR transcription pipeline using:
 * FSMN-VAD speech segmentation
 * CT-Punc punctuation
 * CAM++ speaker diarization
+* Optional Qwen3-ASR single-speaker transcription
+* Optional YouTube downloads through yt-dlp
 * NVIDIA CUDA GPU through WSL2
 
 This setup is intended for transcription of local interview audio/video files or YouTube URLs.
@@ -100,11 +102,17 @@ gpu: NVIDIA GeForce RTX 4080 SUPER
 
 ---
 
-## 5. Install FunASR Dependencies
+## 5. Install Dependencies
 
 ```bash
 uv pip install numpy
 uv pip install -U funasr modelscope huggingface_hub soundfile "yt-dlp[default]"
+```
+
+Optional Qwen3-ASR support for one-speaker/non-interview files:
+
+```bash
+uv pip install -U qwen-asr
 ```
 
 Optional extras if needed:
@@ -155,6 +163,15 @@ For YouTube, paste the URL. The script checks `yt-dlp` for updates, downloads th
 
 For local files, the script lists supported audio/video files in `input/`, asks which one to use, converts it to a temporary 16 kHz mono WAV with `ffmpeg`, transcribes it, and writes the outputs into `output/`.
 
+Then choose the transcription model:
+
+```text
+Choose transcription model:
+  1. FunASR Paraformer + CAM++ speaker diarization
+  2. Qwen3-ASR 0.6B, single-speaker/no diarization
+  3. Qwen3-ASR 1.7B, single-speaker/no diarization
+```
+
 You can also pass a file directly:
 
 ```bash
@@ -165,6 +182,14 @@ Or pass a YouTube URL directly:
 
 ```bash
 uv run python transcribe_speaker.py --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID"
+```
+
+Or choose a model directly:
+
+```bash
+uv run python transcribe_speaker.py input/talk.mp4 --model qwen3-asr-0.6b
+uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker
+uv run python transcribe_speaker.py --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" --model qwen3-asr-1.7b
 ```
 
 If your `yt-dlp` install method does not support self-update, update it manually:
@@ -214,6 +239,10 @@ Speaker 1: 今天我们来聊一下这个问题。
 
 ## 9. Notes
 
+Use `funasr-speaker` for interviews or multi-person recordings. It outputs speaker labels and timestamped speaker turns.
+
+Use `qwen3-asr-0.6b` or `qwen3-asr-1.7b` for one-speaker recordings or videos where diarization is not needed. Qwen mode currently writes plain transcript text plus a single full-duration SRT cue because speaker diarization/timestamp alignment is not wired in this script.
+
 Speaker labels are numeric only:
 
 ```text
@@ -235,6 +264,8 @@ For Chinese interviews, best results usually come from:
 * minimal background noise
 * limited speaker overlap
 * two main speakers
+
+Fun-ASR-Nano-2512 is not exposed as a diarization option here. Its current model card lists speaker diarization and timestamps as TODO items, and the observed `<|no|>` crash happens inside Nano's tokenizer/forced-alignment path rather than in this wrapper script. Use the stable `funasr-speaker` mode for diarized output for now.
 
 ---
 
