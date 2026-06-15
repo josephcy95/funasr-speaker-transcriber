@@ -104,15 +104,30 @@ gpu: NVIDIA GeForce RTX 4080 SUPER
 
 ## 5. Install Dependencies
 
+Install the Python packages:
+
 ```bash
 uv pip install numpy
 uv pip install -U funasr modelscope huggingface_hub soundfile "yt-dlp[default]"
+uv pip install -U qwen-asr
 ```
 
-Optional Qwen3-ASR support for one-speaker/non-interview files:
+After installing Qwen, force `torch` and `torchaudio` back onto the same CUDA wheel set. This avoids the common mismatch where Qwen-related installs upgrade `torch` but leave `torchaudio` on another CUDA build:
 
 ```bash
-uv pip install -U qwen-asr
+uv pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+Verify:
+
+```bash
+uv run python - <<'PY'
+import torch
+import torchaudio
+print("torch:", torch.__version__)
+print("torch cuda:", torch.version.cuda)
+print("torchaudio:", torchaudio.__version__)
+PY
 ```
 
 Optional extras if needed:

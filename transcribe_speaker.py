@@ -22,6 +22,10 @@ MEDIA_EXTENSIONS = {
 
 YTDLP_INSTALL_HINT = 'Install it with: uv pip install -U "yt-dlp[default]"'
 QWEN_INSTALL_HINT = "Install it with: uv pip install -U qwen-asr"
+TORCH_AUDIO_FIX_HINT = (
+    "Run: uv pip install --force-reinstall torch torchaudio "
+    "--index-url https://download.pytorch.org/whl/cu128"
+)
 
 MODEL_CONFIGS = {
     "funasr-speaker": {
@@ -340,7 +344,36 @@ def get_duration_ms(media_path: Path) -> int:
     return max(1000, int(duration * 1000))
 
 
+def check_torch_audio_compat() -> None:
+    try:
+        import torch
+    except ImportError as exc:
+        raise SystemExit(
+            "PyTorch was not found. "
+            "Install torch and torchaudio from the same CUDA index."
+        ) from exc
+
+    try:
+        import torchaudio  # noqa: F401
+    except RuntimeError as exc:
+        message = str(exc)
+        if "different CUDA versions" in message:
+            raise SystemExit(
+                "PyTorch and TorchAudio were built for different CUDA versions.\n"
+                f"Detected torch CUDA: {torch.version.cuda}\n"
+                f"{TORCH_AUDIO_FIX_HINT}"
+            ) from exc
+        raise
+    except ImportError as exc:
+        raise SystemExit(
+            "TorchAudio was not found. "
+            f"{TORCH_AUDIO_FIX_HINT}"
+        ) from exc
+
+
 def load_funasr_speaker_model(device: str):
+    check_torch_audio_compat()
+
     from funasr import AutoModel
 
     print("Loading FunASR speaker diarization model...")
