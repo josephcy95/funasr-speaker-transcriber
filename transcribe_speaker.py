@@ -40,6 +40,11 @@ MODEL_CONFIGS = {
     },
 }
 
+QWEN_OUTPUT_MODES = {
+    "text": "Text only, fastest",
+    "aligned-srt": "Text + aligned SRT, slower",
+}
+
 
 def fmt_time_ms(ms: int) -> str:
     total_seconds = ms / 1000
@@ -151,6 +156,30 @@ def choose_transcription_model() -> str:
                 return choices[index - 1][0]
 
         if choice in MODEL_CONFIGS:
+            return choice
+
+        print(f"Please enter a number from 1 to {len(choices)}.")
+
+
+def choose_qwen_output_mode() -> str:
+    choices = list(QWEN_OUTPUT_MODES.items())
+
+    print("Choose Qwen output:")
+    for index, (_, label) in enumerate(choices, start=1):
+        print(f"  {index}. {label}")
+
+    while True:
+        choice = input("Choose output number, or q to quit: ").strip().lower()
+
+        if choice in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(choices):
+                return choices[index - 1][0]
+
+        if choice in QWEN_OUTPUT_MODES:
             return choice
 
         print(f"Please enter a number from 1 to {len(choices)}.")
@@ -346,7 +375,12 @@ def transcribe_funasr(model, wav_path: Path) -> list[dict]:
     return sentence_info
 
 
-def load_qwen_model(model_id: str, device: str, max_new_tokens: int):
+def load_qwen_model(
+    model_id: str,
+    device: str,
+    max_new_tokens: int,
+    use_aligner: bool,
+):
     try:
         import torch
         from qwen_asr import Qwen3ASRModel
@@ -357,13 +391,22 @@ def load_qwen_model(model_id: str, device: str, max_new_tokens: int):
 
     print(f"Loading Qwen3-ASR model: {model_id}")
 
-    return Qwen3ASRModel.from_pretrained(
-        model_id,
-        dtype=dtype,
-        device_map=device,
-        max_inference_batch_size=8,
-        max_new_tokens=max_new_tokens,
-    )
+    model_kwargs = {
+        "dtype": dtype,
+        "device_map": device,
+        "max_inference_batch_size": 8,
+        "max_new_tokens": max_new_tokens,
+    }
+
+    if use_aligner:
+        print("Loading Qwen3 ForcedAligner for SRT timestamps...")
+        model_kwargs["forced_aligner"] = "Qwen/Qwen3-ForcedAligner-0.6B"
+        model_kwargs["forced_aligner_kwargs"] = {
+            "dtype": dtype,
+            "device_map": device,
+        }
+
+    return Qwen3ASRModel.from_pretrained(model_id, **model_kwargs)
 
 
 def get_result_value(result, key: str):
@@ -373,23 +416,112 @@ def get_result_value(result, key: str):
     return getattr(result, key, None)
 
 
-def transcribe_qwen(model, wav_path: Path, language: str | None) -> tuple[str, str | None]:
+def timestamp_to_ms(value) -> int:
+    return max(0, int(float(value) * 1000))
+
+
+def extract_qwen_timestamp_units(result) -> list[dict]:
+    time_stamps = get_result_value(result, "time_stamps") or []
+
+    if not isinstance(time_stamps, list):
+        return []
+
+    if len(time_stamps) == 1 and isinstance(time_stamps[0], list):
+        time_stamps = time_stamps[0]
+
+    units = []
+    for item in time_stamps:
+        text = (get_result_value(item, "text") or "").strip()
+        start_time = get_result_value(item, "start_time")
+        end_time = get_result_value(item, "end_time")
+
+        if not text or start_time is None or end_time is None:
+            continue
+
+        units.append(
+            {
+                "text": text,
+                "start_ms": timestamp_to_ms(start_time),
+                "end_ms": timestamp_to_ms(end_time),
+            }
+        )
+
+    return units
+
+
+def join_subtitle_text(current_text: str, next_text: str) -> str:
+    if not current_text:
+        return next_text
+
+    if current_text[-1].isascii() and next_text[:1].isascii():
+        return f"{current_text} {next_text}"
+
+    return f"{current_text}{next_text}"
+
+
+def build_qwen_srt_segments(units: list[dict], max_chars: int = 42) -> list[dict]:
+    segments = []
+    current_text = ""
+    current_start = None
+    current_end = None
+
+    for unit in units:
+        unit_text = unit["text"]
+        candidate_text = join_subtitle_text(current_text, unit_text)
+
+        if current_text and len(candidate_text) > max_chars:
+            segments.append(
+                {
+                    "text": current_text,
+                    "start_ms": current_start,
+                    "end_ms": current_end,
+                }
+            )
+            current_text = unit_text
+            current_start = unit["start_ms"]
+            current_end = unit["end_ms"]
+            continue
+
+        current_text = candidate_text
+        current_start = unit["start_ms"] if current_start is None else current_start
+        current_end = unit["end_ms"]
+
+    if current_text:
+        segments.append(
+            {
+                "text": current_text,
+                "start_ms": current_start,
+                "end_ms": current_end,
+            }
+        )
+
+    return segments
+
+
+def transcribe_qwen(
+    model,
+    wav_path: Path,
+    language: str | None,
+    return_time_stamps: bool,
+) -> tuple[str, str | None, list[dict]]:
     print(f"Transcribing temporary WAV with Qwen3-ASR: {wav_path}")
 
     results = model.transcribe(
         audio=str(wav_path),
         language=language,
+        return_time_stamps=return_time_stamps,
     )
 
     result = results[0] if isinstance(results, list) else results
     text = (get_result_value(result, "text") or "").strip()
     detected_language = get_result_value(result, "language")
+    timestamp_units = extract_qwen_timestamp_units(result) if return_time_stamps else []
 
     if not text:
         print("No transcript text found.")
         print(results)
 
-    return text, detected_language
+    return text, detected_language, timestamp_units
 
 
 def write_speaker_outputs(
@@ -476,26 +608,52 @@ def write_qwen_outputs(
     duration_ms: int,
     outdir: Path,
     base: str,
-) -> tuple[Path, Path, Path]:
+    output_mode: str,
+    timestamp_units: list[dict],
+) -> tuple[Path, Path, Path | None]:
     outdir.mkdir(parents=True, exist_ok=True)
 
     txt_ts_path = outdir / f"{base}.txt"
     txt_plain_path = outdir / f"{base}.plain.txt"
-    srt_path = outdir / f"{base}.srt"
+    srt_path = outdir / f"{base}.srt" if output_mode == "aligned-srt" else None
+    srt_segments = build_qwen_srt_segments(timestamp_units)
 
     with open(txt_ts_path, "w", encoding="utf-8") as f:
         if language:
             f.write(f"Language: {language}\n")
-        f.write(f"[{fmt_time_ms(0)} - {fmt_time_ms(duration_ms)}] {text}\n")
+
+        if srt_segments:
+            for segment in srt_segments:
+                f.write(
+                    f"[{fmt_time_ms(segment['start_ms'])} - "
+                    f"{fmt_time_ms(segment['end_ms'])}] {segment['text']}\n"
+                )
+        else:
+            f.write(f"[{fmt_time_ms(0)} - {fmt_time_ms(duration_ms)}] {text}\n")
 
     with open(txt_plain_path, "w", encoding="utf-8") as f:
         f.write(text)
         f.write("\n")
 
-    with open(srt_path, "w", encoding="utf-8") as f:
-        f.write("1\n")
-        f.write(f"{fmt_srt_time(0)} --> {fmt_srt_time(duration_ms)}\n")
-        f.write(f"{wrap_srt_text(text)}\n")
+    if srt_path:
+        if not srt_segments:
+            print("No usable Qwen timestamps found; writing one full-duration SRT cue.")
+            srt_segments = [
+                {
+                    "text": text,
+                    "start_ms": 0,
+                    "end_ms": duration_ms,
+                }
+            ]
+
+        with open(srt_path, "w", encoding="utf-8") as f:
+            for index, segment in enumerate(srt_segments, start=1):
+                f.write(f"{index}\n")
+                f.write(
+                    f"{fmt_srt_time(segment['start_ms'])} --> "
+                    f"{fmt_srt_time(segment['end_ms'])}\n"
+                )
+                f.write(f"{wrap_srt_text(segment['text'])}\n\n")
 
     return txt_ts_path, txt_plain_path, srt_path
 
@@ -518,6 +676,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--qwen-language",
         help='Optional Qwen language hint, for example "Chinese" or "English".',
+    )
+    parser.add_argument(
+        "--qwen-output",
+        choices=list(QWEN_OUTPUT_MODES),
+        help="Qwen output mode. If omitted, choose interactively.",
     )
     parser.add_argument(
         "--qwen-max-new-tokens",
@@ -546,6 +709,10 @@ def main():
     source_type, source_value, source_label = select_media_source(args, input_dir)
     model_choice = args.model or choose_transcription_model()
     model_config = MODEL_CONFIGS[model_choice]
+    qwen_output_mode = None
+
+    if model_config["kind"] == "qwen":
+        qwen_output_mode = args.qwen_output or choose_qwen_output_mode()
 
     with tempfile.TemporaryDirectory(prefix="funasr-transcribe-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -566,12 +733,19 @@ def main():
                 output_base,
             )
         elif model_config["kind"] == "qwen":
+            use_aligner = qwen_output_mode == "aligned-srt"
             model = load_qwen_model(
                 model_config["model_id"],
                 args.device,
                 args.qwen_max_new_tokens,
+                use_aligner,
             )
-            text, language = transcribe_qwen(model, wav_path, args.qwen_language)
+            text, language, timestamp_units = transcribe_qwen(
+                model,
+                wav_path,
+                args.qwen_language,
+                use_aligner,
+            )
 
             if not text:
                 return
@@ -582,14 +756,21 @@ def main():
                 get_duration_ms(wav_path),
                 outdir,
                 output_base,
+                qwen_output_mode,
+                timestamp_units,
             )
 
     print("Done.")
     print(f"Source             : {source_label}")
     print(f"Model              : {model_config['label']}")
+    if qwen_output_mode:
+        print(f"Qwen output        : {QWEN_OUTPUT_MODES[qwen_output_mode]}")
     print(f"TXT with timestamp : {txt_ts_path}")
     print(f"TXT plain          : {txt_plain_path}")
-    print(f"SRT                : {srt_path}")
+    if srt_path:
+        print(f"SRT                : {srt_path}")
+    else:
+        print("SRT                : skipped")
 
 
 if __name__ == "__main__":

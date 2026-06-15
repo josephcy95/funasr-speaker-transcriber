@@ -172,6 +172,14 @@ Choose transcription model:
   3. Qwen3-ASR 1.7B, single-speaker/no diarization
 ```
 
+If you choose a Qwen model, choose whether to generate text only or also run the aligner for SRT timestamps:
+
+```text
+Choose Qwen output:
+  1. Text only, fastest
+  2. Text + aligned SRT, slower
+```
+
 You can also pass a file directly:
 
 ```bash
@@ -190,6 +198,13 @@ Or choose a model directly:
 uv run python transcribe_speaker.py input/talk.mp4 --model qwen3-asr-0.6b
 uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker
 uv run python transcribe_speaker.py --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" --model qwen3-asr-1.7b
+```
+
+For Qwen, choose the output mode directly:
+
+```bash
+uv run python transcribe_speaker.py input/talk.mp4 --model qwen3-asr-0.6b --qwen-output text
+uv run python transcribe_speaker.py input/talk.mp4 --model qwen3-asr-1.7b --qwen-output aligned-srt
 ```
 
 If your `yt-dlp` install method does not support self-update, update it manually:
@@ -241,7 +256,9 @@ Speaker 1: 今天我们来聊一下这个问题。
 
 Use `funasr-speaker` for interviews or multi-person recordings. It outputs speaker labels and timestamped speaker turns.
 
-Use `qwen3-asr-0.6b` or `qwen3-asr-1.7b` for one-speaker recordings or videos where diarization is not needed. Qwen mode currently writes plain transcript text plus a single full-duration SRT cue because speaker diarization/timestamp alignment is not wired in this script.
+Use `qwen3-asr-0.6b` or `qwen3-asr-1.7b` for one-speaker recordings or videos where diarization is not needed. `--qwen-output text` writes only text outputs and skips the aligner. `--qwen-output aligned-srt` loads `Qwen/Qwen3-ForcedAligner-0.6B` and writes an SRT using returned timestamp units.
+
+Qwen3-ASR is not a diarization model. Using it for diarized multi-speaker output would require a separate speaker diarization stage, splitting/merging audio segments, and reconciling timestamps. For this project, `funasr-speaker` is the practical diarized path.
 
 Speaker labels are numeric only:
 
