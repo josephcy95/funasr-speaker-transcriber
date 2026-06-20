@@ -187,6 +187,19 @@ Choose transcription model:
   3. Qwen3-ASR 1.7B, single-speaker/no diarization
 ```
 
+If you choose FunASR speaker mode, or choose a Qwen model without `--qwen-language`, the CLI asks what language is spoken in the media:
+
+```text
+Choose spoken language:
+  1. Auto / not sure
+  2. Chinese / Mandarin
+  3. English
+  4. Chinese + English mix
+  5. Other language
+```
+
+For FunASR this is written as output metadata and shown in the final summary. For Qwen it is also used as the language hint unless you pass `--qwen-language`.
+
 If you choose a Qwen model, choose whether to generate text only or also run the aligner for SRT timestamps:
 
 ```text
@@ -213,6 +226,15 @@ Or choose a model directly:
 uv run python transcribe_speaker.py input/talk.mp4 --model qwen3-asr-0.6b
 uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker
 uv run python transcribe_speaker.py --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" --model qwen3-asr-1.7b
+```
+
+Choose the spoken language directly:
+
+```bash
+uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker --spoken-language zh
+uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker --spoken-language en
+uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker --spoken-language zh-en
+uv run python transcribe_speaker.py input/interview.mp4 --model funasr-speaker --spoken-language other --spoken-language-name Malay
 ```
 
 For Qwen, choose the output mode directly:
@@ -269,7 +291,7 @@ Speaker 1: 今天我们来聊一下这个问题。
 
 ## 9. Notes
 
-Use `funasr-speaker` for interviews or multi-person recordings. It outputs speaker labels and timestamped speaker turns.
+Use `funasr-speaker` for interviews or multi-person recordings. It outputs speaker labels and timestamped speaker turns. The `--spoken-language` option records the expected language in the timestamped text output and final summary; it does not switch the underlying FunASR model. The current FunASR speaker path uses `paraformer-zh`, which is best for Chinese, English, and Chinese-English mixed speech.
 
 Use `qwen3-asr-0.6b` or `qwen3-asr-1.7b` for one-speaker recordings or videos where diarization is not needed. `--qwen-output text` writes only text outputs and skips the aligner. `--qwen-output aligned-srt` loads `Qwen/Qwen3-ForcedAligner-0.6B` and writes an SRT using returned timestamp units.
 

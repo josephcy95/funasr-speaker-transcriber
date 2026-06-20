@@ -1,6 +1,8 @@
 import argparse
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -49,6 +51,100 @@ QWEN_OUTPUT_MODES = {
     "aligned-srt": "Text + aligned SRT, slower",
 }
 
+SPOKEN_LANGUAGE_CHOICES = {
+    "auto": {
+        "label": "Auto / not sure",
+        "qwen_hint": None,
+    },
+    "zh": {
+        "label": "Chinese / Mandarin",
+        "qwen_hint": "Chinese",
+    },
+    "en": {
+        "label": "English",
+        "qwen_hint": "English",
+    },
+    "zh-en": {
+        "label": "Chinese + English mix",
+        "qwen_hint": "Chinese and English",
+    },
+    "other": {
+        "label": "Other language",
+        "qwen_hint": None,
+    },
+}
+
+COLOR_ENABLED = True
+
+ANSI_CODES = {
+    "reset": "0",
+    "bold": "1",
+    "dim": "2",
+    "red": "31",
+    "green": "32",
+    "yellow": "33",
+    "blue": "34",
+    "magenta": "35",
+    "cyan": "36",
+    "white": "37",
+}
+
+
+def set_color_enabled(no_color: bool) -> None:
+    global COLOR_ENABLED
+    COLOR_ENABLED = (
+        not no_color
+        and os.environ.get("NO_COLOR") is None
+        and sys.stdout.isatty()
+    )
+
+
+def style(text: str, color: str | None = None, *, bold: bool = False, dim: bool = False) -> str:
+    if not COLOR_ENABLED:
+        return text
+
+    codes = []
+    if bold:
+        codes.append(ANSI_CODES["bold"])
+    if dim:
+        codes.append(ANSI_CODES["dim"])
+    if color:
+        codes.append(ANSI_CODES[color])
+
+    if not codes:
+        return text
+
+    return f"\033[{';'.join(codes)}m{text}\033[{ANSI_CODES['reset']}m"
+
+
+def print_header(title: str) -> None:
+    print()
+    print(style(f"== {title} ==", "cyan", bold=True))
+
+
+def print_option(index: int, label: str) -> None:
+    print(f"  {style(str(index), 'green', bold=True)}. {label}")
+
+
+def print_info(message: str) -> None:
+    print(style("info: ", "blue", bold=True) + message)
+
+
+def print_warning(message: str) -> None:
+    print(style("warning: ", "yellow", bold=True) + message)
+
+
+def print_success(message: str) -> None:
+    print(style("done: ", "green", bold=True) + message)
+
+
+def prompt_input(message: str) -> str:
+    return input(style(f"? {message} ", "cyan", bold=True))
+
+
+def print_summary_row(label: str, value) -> None:
+    print(f"{style(label.ljust(18), 'cyan', bold=True)}: {value}")
+
 
 def fmt_time_ms(ms: int) -> str:
     total_seconds = ms / 1000
@@ -90,12 +186,12 @@ def choose_input_file(input_dir: Path) -> Path:
             "Put an mp4, m4a, wav, mp3, or other supported media file there first."
         )
 
-    print(f"Input files in {input_dir}:")
+    print_header(f"Input files in {input_dir}")
     for index, path in enumerate(files, start=1):
-        print(f"  {index}. {path.name}")
+        print_option(index, path.name)
 
     while True:
-        choice = input("Choose a file number, or q to quit: ").strip()
+        choice = prompt_input("Choose a file number, or q to quit:").strip()
 
         if choice.lower() in {"q", "quit", "exit"}:
             raise SystemExit(0)
@@ -105,16 +201,16 @@ def choose_input_file(input_dir: Path) -> Path:
             if 1 <= index <= len(files):
                 return files[index - 1]
 
-        print(f"Please enter a number from 1 to {len(files)}.")
+        print_warning(f"Please enter a number from 1 to {len(files)}.")
 
 
 def choose_source() -> str:
-    print("Choose transcription source:")
-    print("  1. YouTube URL")
-    print("  2. Local file from input/")
+    print_header("Choose transcription source")
+    print_option(1, "YouTube URL")
+    print_option(2, "Local file from input/")
 
     while True:
-        choice = input("Choose 1 or 2, or q to quit: ").strip().lower()
+        choice = prompt_input("Choose 1 or 2, or q to quit:").strip().lower()
 
         if choice in {"q", "quit", "exit"}:
             raise SystemExit(0)
@@ -125,12 +221,12 @@ def choose_source() -> str:
         if choice in {"2", "input", "local"}:
             return "input"
 
-        print("Please enter 1 for YouTube or 2 for input folder.")
+        print_warning("Please enter 1 for YouTube or 2 for input folder.")
 
 
 def prompt_youtube_url() -> str:
     while True:
-        url = input("Paste YouTube URL, or q to quit: ").strip()
+        url = prompt_input("Paste YouTube URL, or q to quit:").strip()
 
         if url.lower() in {"q", "quit", "exit"}:
             raise SystemExit(0)
@@ -138,18 +234,18 @@ def prompt_youtube_url() -> str:
         if url:
             return url
 
-        print("Please paste a YouTube URL.")
+        print_warning("Please paste a YouTube URL.")
 
 
 def choose_transcription_model() -> str:
     choices = list(MODEL_CONFIGS.items())
 
-    print("Choose transcription model:")
+    print_header("Choose transcription model")
     for index, (_, config) in enumerate(choices, start=1):
-        print(f"  {index}. {config['label']}")
+        print_option(index, config["label"])
 
     while True:
-        choice = input("Choose a model number, or q to quit: ").strip().lower()
+        choice = prompt_input("Choose a model number, or q to quit:").strip().lower()
 
         if choice in {"q", "quit", "exit"}:
             raise SystemExit(0)
@@ -162,18 +258,18 @@ def choose_transcription_model() -> str:
         if choice in MODEL_CONFIGS:
             return choice
 
-        print(f"Please enter a number from 1 to {len(choices)}.")
+        print_warning(f"Please enter a number from 1 to {len(choices)}.")
 
 
 def choose_qwen_output_mode() -> str:
     choices = list(QWEN_OUTPUT_MODES.items())
 
-    print("Choose Qwen output:")
+    print_header("Choose Qwen output")
     for index, (_, label) in enumerate(choices, start=1):
-        print(f"  {index}. {label}")
+        print_option(index, label)
 
     while True:
-        choice = input("Choose output number, or q to quit: ").strip().lower()
+        choice = prompt_input("Choose output number, or q to quit:").strip().lower()
 
         if choice in {"q", "quit", "exit"}:
             raise SystemExit(0)
@@ -186,7 +282,60 @@ def choose_qwen_output_mode() -> str:
         if choice in QWEN_OUTPUT_MODES:
             return choice
 
-        print(f"Please enter a number from 1 to {len(choices)}.")
+        print_warning(f"Please enter a number from 1 to {len(choices)}.")
+
+
+def choose_spoken_language() -> tuple[str, str | None]:
+    choices = list(SPOKEN_LANGUAGE_CHOICES.items())
+
+    print_header("Choose spoken language")
+    for index, (_, config) in enumerate(choices, start=1):
+        print_option(index, config["label"])
+
+    while True:
+        choice = prompt_input("Choose language number, or q to quit:").strip().lower()
+
+        if choice in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+
+        language_key = None
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(choices):
+                language_key = choices[index - 1][0]
+        elif choice in SPOKEN_LANGUAGE_CHOICES:
+            language_key = choice
+
+        if language_key:
+            if language_key == "other":
+                language_name = prompt_input(
+                    "Type the language name, or press Enter for Other:"
+                ).strip()
+                return language_key, language_name or None
+
+            return language_key, None
+
+        print_warning(f"Please enter a number from 1 to {len(choices)}.")
+
+
+def spoken_language_label(language_key: str | None, language_name: str | None = None) -> str | None:
+    if not language_key:
+        return None
+
+    if language_key == "other":
+        return language_name or SPOKEN_LANGUAGE_CHOICES[language_key]["label"]
+
+    return SPOKEN_LANGUAGE_CHOICES[language_key]["label"]
+
+
+def qwen_language_hint(language_key: str | None, language_name: str | None = None) -> str | None:
+    if not language_key:
+        return None
+
+    if language_key == "other":
+        return language_name
+
+    return SPOKEN_LANGUAGE_CHOICES[language_key]["qwen_hint"]
 
 
 def resolve_input_file(audio_arg: str | None, input_dir: Path) -> Path:
@@ -208,7 +357,7 @@ def check_ytdlp_update() -> None:
     if shutil.which("yt-dlp") is None:
         raise SystemExit(f"yt-dlp was not found. {YTDLP_INSTALL_HINT}")
 
-    print("Checking yt-dlp for updates...")
+    print_info("Checking yt-dlp for updates...")
     result = subprocess.run(
         ["yt-dlp", "-U"],
         capture_output=True,
@@ -220,7 +369,7 @@ def check_ytdlp_update() -> None:
             print(output)
 
     if result.returncode != 0:
-        print("yt-dlp update check did not complete; continuing with installed yt-dlp.")
+        print_warning("yt-dlp update check did not complete; continuing with installed yt-dlp.")
 
 
 def download_youtube_media(url: str, temp_dir: Path) -> Path:
@@ -237,7 +386,7 @@ def download_youtube_media(url: str, temp_dir: Path) -> Path:
         url,
     ]
 
-    print("Downloading YouTube media with yt-dlp...")
+    print_info("Downloading YouTube media with yt-dlp...")
 
     try:
         subprocess.run(command, check=True)
@@ -254,7 +403,7 @@ def download_youtube_media(url: str, temp_dir: Path) -> Path:
         raise SystemExit("yt-dlp finished, but no downloaded media file was found.")
 
     downloaded_path = max(candidates, key=lambda path: path.stat().st_mtime)
-    print(f"Downloaded YouTube media: {downloaded_path.name}")
+    print_info(f"Downloaded YouTube media: {downloaded_path.name}")
     return downloaded_path
 
 
@@ -310,7 +459,7 @@ def convert_to_16k_wav(input_path: Path, temp_dir: Path) -> Path:
         str(wav_path),
     ]
 
-    print(f"Converting to temporary 16 kHz mono WAV: {input_path}")
+    print_info(f"Converting to temporary 16 kHz mono WAV: {input_path}")
 
     try:
         subprocess.run(command, check=True)
@@ -376,7 +525,7 @@ def load_funasr_speaker_model(device: str):
 
     from funasr import AutoModel
 
-    print("Loading FunASR speaker diarization model...")
+    print_info("Loading FunASR speaker diarization model...")
 
     return AutoModel(
         model="funasr/paraformer-zh",
@@ -391,7 +540,7 @@ def load_funasr_speaker_model(device: str):
 
 
 def transcribe_funasr(model, wav_path: Path) -> list[dict]:
-    print(f"Transcribing temporary WAV with FunASR: {wav_path}")
+    print_info(f"Transcribing temporary WAV with FunASR: {wav_path}")
 
     res = model.generate(
         input=str(wav_path),
@@ -401,7 +550,7 @@ def transcribe_funasr(model, wav_path: Path) -> list[dict]:
     sentence_info = res[0].get("sentence_info", [])
 
     if not sentence_info:
-        print("No sentence_info found.")
+        print_warning("No sentence_info found.")
         print(res)
         return []
 
@@ -422,7 +571,7 @@ def load_qwen_model(
 
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
 
-    print(f"Loading Qwen3-ASR model: {model_id}")
+    print_info(f"Loading Qwen3-ASR model: {model_id}")
 
     model_kwargs = {
         "dtype": dtype,
@@ -432,7 +581,7 @@ def load_qwen_model(
     }
 
     if use_aligner:
-        print("Loading Qwen3 ForcedAligner for SRT timestamps...")
+        print_info("Loading Qwen3 ForcedAligner for SRT timestamps...")
         model_kwargs["forced_aligner"] = "Qwen/Qwen3-ForcedAligner-0.6B"
         model_kwargs["forced_aligner_kwargs"] = {
             "dtype": dtype,
@@ -537,7 +686,7 @@ def transcribe_qwen(
     language: str | None,
     return_time_stamps: bool,
 ) -> tuple[str, str | None, list[dict]]:
-    print(f"Transcribing temporary WAV with Qwen3-ASR: {wav_path}")
+    print_info(f"Transcribing temporary WAV with Qwen3-ASR: {wav_path}")
 
     results = model.transcribe(
         audio=str(wav_path),
@@ -551,7 +700,7 @@ def transcribe_qwen(
     timestamp_units = extract_qwen_timestamp_units(result) if return_time_stamps else []
 
     if not text:
-        print("No transcript text found.")
+        print_warning("No transcript text found.")
         print(results)
 
     return text, detected_language, timestamp_units
@@ -561,6 +710,7 @@ def write_speaker_outputs(
     sentence_info: list[dict],
     outdir: Path,
     base: str,
+    spoken_language: str | None,
 ) -> tuple[Path, Path, Path]:
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -569,6 +719,9 @@ def write_speaker_outputs(
     srt_path = outdir / f"{base}.srt"
 
     with open(txt_ts_path, "w", encoding="utf-8") as f:
+        if spoken_language:
+            f.write(f"Spoken language: {spoken_language}\n\n")
+
         for s in sentence_info:
             start = int(s.get("start", 0))
             end = int(s.get("end", 0))
@@ -670,7 +823,9 @@ def write_qwen_outputs(
 
     if srt_path:
         if not srt_segments:
-            print("No usable Qwen timestamps found; writing one full-duration SRT cue.")
+            print_warning(
+                "No usable Qwen timestamps found; writing one full-duration SRT cue."
+            )
             srt_segments = [
                 {
                     "text": text,
@@ -711,6 +866,18 @@ def parse_args() -> argparse.Namespace:
         help='Optional Qwen language hint, for example "Chinese" or "English".',
     )
     parser.add_argument(
+        "--spoken-language",
+        choices=list(SPOKEN_LANGUAGE_CHOICES),
+        help=(
+            "Language spoken in the media. Used as output metadata for FunASR "
+            "and as a Qwen hint when --qwen-language is not set."
+        ),
+    )
+    parser.add_argument(
+        "--spoken-language-name",
+        help='Custom language name when --spoken-language other, for example "Malay".',
+    )
+    parser.add_argument(
         "--qwen-output",
         choices=list(QWEN_OUTPUT_MODES),
         help="Qwen output mode. If omitted, choose interactively.",
@@ -732,20 +899,52 @@ def parse_args() -> argparse.Namespace:
         default="cuda:0",
         help="FunASR device, for example cuda:0 or cpu",
     )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored CLI output.",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    set_color_enabled(args.no_color)
+
     input_dir = Path(args.input_dir)
     outdir = Path(args.outdir)
     source_type, source_value, source_label = select_media_source(args, input_dir)
     model_choice = args.model or choose_transcription_model()
     model_config = MODEL_CONFIGS[model_choice]
     qwen_output_mode = None
+    spoken_language_key = args.spoken_language
+    spoken_language_name = args.spoken_language_name
 
     if model_config["kind"] == "qwen":
         qwen_output_mode = args.qwen_output or choose_qwen_output_mode()
+
+    needs_spoken_language = (
+        model_config["kind"] == "funasr-speaker"
+        or (model_config["kind"] == "qwen" and not args.qwen_language)
+    )
+    if not spoken_language_key and needs_spoken_language and sys.stdin.isatty():
+        spoken_language_key, spoken_language_name = choose_spoken_language()
+
+    spoken_language = spoken_language_label(
+        spoken_language_key,
+        spoken_language_name,
+    )
+    qwen_language = args.qwen_language or qwen_language_hint(
+        spoken_language_key,
+        spoken_language_name,
+    )
+
+    if model_config["kind"] == "funasr-speaker" and spoken_language_key == "other":
+        print_warning(
+            "FunASR speaker mode uses paraformer-zh, which is best for Chinese, "
+            "English, and Chinese-English mixed speech. For other languages, a "
+            "Qwen model may transcribe better but will not add speaker labels."
+        )
 
     with tempfile.TemporaryDirectory(prefix="funasr-transcribe-") as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -764,6 +963,7 @@ def main():
                 sentence_info,
                 outdir,
                 output_base,
+                spoken_language,
             )
         elif model_config["kind"] == "qwen":
             use_aligner = qwen_output_mode == "aligned-srt"
@@ -776,7 +976,7 @@ def main():
             text, language, timestamp_units = transcribe_qwen(
                 model,
                 wav_path,
-                args.qwen_language,
+                qwen_language,
                 use_aligner,
             )
 
@@ -785,7 +985,7 @@ def main():
 
             txt_ts_path, txt_plain_path, srt_path = write_qwen_outputs(
                 text,
-                language,
+                language or spoken_language,
                 get_duration_ms(wav_path),
                 outdir,
                 output_base,
@@ -793,17 +993,22 @@ def main():
                 timestamp_units,
             )
 
-    print("Done.")
-    print(f"Source             : {source_label}")
-    print(f"Model              : {model_config['label']}")
+    print()
+    print_success("Transcription complete.")
+    print_summary_row("Source", source_label)
+    print_summary_row("Model", model_config["label"])
+    if spoken_language:
+        print_summary_row("Spoken language", spoken_language)
+    if qwen_language:
+        print_summary_row("Qwen language hint", qwen_language)
     if qwen_output_mode:
-        print(f"Qwen output        : {QWEN_OUTPUT_MODES[qwen_output_mode]}")
-    print(f"TXT with timestamp : {txt_ts_path}")
-    print(f"TXT plain          : {txt_plain_path}")
+        print_summary_row("Qwen output", QWEN_OUTPUT_MODES[qwen_output_mode])
+    print_summary_row("TXT with timestamp", txt_ts_path)
+    print_summary_row("TXT plain", txt_plain_path)
     if srt_path:
-        print(f"SRT                : {srt_path}")
+        print_summary_row("SRT", srt_path)
     else:
-        print("SRT                : skipped")
+        print_summary_row("SRT", "skipped")
 
 
 if __name__ == "__main__":
