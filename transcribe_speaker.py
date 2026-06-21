@@ -353,13 +353,14 @@ def resolve_input_file(audio_arg: str | None, input_dir: Path) -> Path:
     raise SystemExit(f"Input file not found: {audio_arg}")
 
 
-def check_ytdlp_update() -> None:
-    if shutil.which("yt-dlp") is None:
+def check_ytdlp_update() -> str:
+    ytdlp_path = shutil.which("yt-dlp")
+    if ytdlp_path is None:
         raise SystemExit(f"yt-dlp was not found. {YTDLP_INSTALL_HINT}")
 
     print_info("Checking yt-dlp for updates...")
     result = subprocess.run(
-        ["yt-dlp", "-U"],
+        [ytdlp_path, "-U"],
         capture_output=True,
         text=True,
     )
@@ -371,13 +372,15 @@ def check_ytdlp_update() -> None:
     if result.returncode != 0:
         print_warning("yt-dlp update check did not complete; continuing with installed yt-dlp.")
 
+    return ytdlp_path
+
 
 def download_youtube_media(url: str, temp_dir: Path) -> Path:
-    check_ytdlp_update()
+    ytdlp_path = check_ytdlp_update()
 
     output_template = temp_dir / "%(title).120B [%(id)s].%(ext)s"
     command = [
-        "yt-dlp",
+        ytdlp_path,
         "--no-playlist",
         "-f",
         "bestaudio/best",
